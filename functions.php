@@ -17,6 +17,148 @@ function default_catalog(): array
     ];
 }
 
+function save_catalog(array $catalog, string $file = CATALOG_FILE): bool
+{
+    $json = json_encode($catalog, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    if ($json === false) {
+        return false;
+    }
+    return @file_put_contents($file, $json, LOCK_EX) !== false;
+}
+
+function restore_default_catalog(string $file): array
+{
+    if (is_file($file)) {
+        @rename($file, $file . '.broken' . date('YmdHis'));
+    }
+    $catalog = default_catalog();
+    save_catalog($catalog, $file);
+    return $catalog;
+}
+
+function load_catalog(string $file = CATALOG_FILE): array
+{
+    if (!is_file($file) || !is_readable($file)) {
+        return restore_default_catalog($file);
+    }
+
+    $json = file_get_contents($file);
+    if ($json === false) {
+        return restore_default_catalog($file);
+    }
+
+    if (!json_decode($json)) {
+        return restore_default_catalog($file);
+    }
+
+    $catalog = json_decode($json, true);
+    if (!is_array($catalog) || array_is_list($catalog)) {
+        return restore_default_catalog($file);
+    }
+    return $catalog;
+}
+
+function catalog_stats(array $catalog): array
+{
+    $stock = 0;
+    $value = 0.0;
+    foreach($catalog as $product) {
+        $stock += (int) $product['stock'];
+        $value += (float) $product['price'] * (int) $product['stock'];
+    }
+    return [
+        'products' => count($catalog),
+        'stock' => $stock,
+        'value' => $value,
+    ];
+}
+
+function find_product(array $catalog, int $id): ?array
+{
+    foreach ($catalog as $product) {
+        if ((int) $product['id'] === $id) {
+            return $product;
+        }
+    }
+    return null;
+}
+
+function next_id(array $catalog) : int
+{
+    $max = 0;
+    foreach($catalog as $product) {
+        $max = max($max, (int) ($product['id'] ?? 0));
+    }
+    return $max + 1;
+}
+
+function add_product(array $catalog, array $data): array
+{
+    $catalog = [
+      'id' => next_id($catalog),
+      'title' => trim((string) ($data['title'] ?? '')),
+      'category' => trim((string) ($data['category'] ?? '')),
+      'price' => (int) round((float) ($data['price'] ?? 0)),
+        'stock' => (int) round((float) ($data['stock'] ?? 0)),
+        'discount' => (int) round((float) ($data['discount'] ?? 0)),
+    ];
+    return $catalog;
+}
+
+function update_product(array $catalog, int $id, array $data): array
+{
+    foreach($catalog as $key => $product) {
+        if ((int) $product['id'] === $id) {
+            $catalog[$key]['title'] = trim((string) ($data['title'] ?? $product['title']));
+            $catalog[$key]['category'] = trim((string) ($data['category'] ?? $product['category']));
+            $catalog[$key]['price'] = (int) round((float) ($data['price'] ?? $product['price']));
+            $catalog[$key]['stock'] = (int) ($data['stock'] ?? $product['stock']);
+            $catalog[$key]['discount'] = (int) ($data['discount'] ?? $product['discount']);
+            return $catalog;
+        }
+    }
+    return $catalog;
+}
+
+function delete_product(array $catalog, int $id): array
+{
+    foreach($catalog as $key => $product) {
+        if ((int) $product['id'] === $id) {
+            unset($catalog[$key]);
+            return array_values($catalog);
+        }
+    }
+    return $catalog;
+}
+
+function sort_by_stock(array $catalog, string $direction = 'asc'): array
+{
+    usort($catalog, function (array $a, array $b) use ($direction): int {
+        if ($direction === 'desc') {
+            return $b['stock'] <=> $a['stock'];
+        }
+        return $a['stock'] <=> $b['stock'];
+    });
+    return $catalog;
+}
+
+function paginate(array $items, int $page, int $perPage = PER_PAGE): array
+{
+    $total = count($items);
+    $totalPages = max(1, (int) ceil($total / $perPage));
+    $page = max(1, min($page, $totalPages));
+
+    $start = ($page - 1) * $perPage;
+    $items = array_slice($items, $start, $perPage);
+
+    return [
+        'items'      => $items,
+        'total'      => $total,
+        'page'       => $page,
+        'totalPages' => $totalPages,
+    ];
+}
+
 function e(mixed $value): string
 {
     return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
@@ -100,15 +242,6 @@ function validate_product(array $data): array
     }
 
     return $errors;
-}
-
-function next_id(array $catalog): int
-{
-    $max = 0;
-    foreach ($catalog as $product) {
-        $max = max($max, (int) ($product['id'] ?? 0));
-    }
-    return $max + 1;
 }
 
 function sanitize_product(array $data, int $id): array
